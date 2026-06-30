@@ -6,7 +6,7 @@ one SQLite file and exposes retrieval through MCP.
 ## 1. Install
 
 ```bash
-npm install -g @gilligan-tech.inc/local-rag-mcp
+npm install -g @gilligantechinc/local-rag-mcp
 local-rag-mcp init
 ```
 
