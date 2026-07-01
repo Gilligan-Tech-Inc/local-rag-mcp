@@ -36,7 +36,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://git.bluenotelogic.com/daveadmin/local-rag-mcp.git"
+    "url": "git+https://github.com/Gilligan-Tech-Inc/local-rag-mcp.git"
   },
   "homepage": "https://gilligantechinc.com/",
   "dependencies": {
