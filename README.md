@@ -18,23 +18,10 @@ It intentionally does **not** implement a graph:
 
 ## Install
 
-Use directly with MCP clients:
-
-```json
-{
-  "mcpServers": {
-    "local-rag": {
-      "command": "npx",
-      "args": ["-y", "@gilligantechinc/local-rag-mcp"]
-    }
-  }
-}
-```
-
-Or install globally for faster startup:
+Install globally:
 
 ```bash
-npm install -g @gilligantechinc/local-rag-mcp
+npm install -g @gilligan-tech/local-rag-mcp
 local-rag-mcp init
 ```
 
@@ -78,12 +65,13 @@ ollama pull nomic-embed-text
 
 ## Claude Desktop / Claude Code
 
+After global install, use the CLI as the MCP stdio command:
+
 ```json
 {
   "mcpServers": {
     "local-rag": {
-      "command": "npx",
-      "args": ["-y", "@gilligantechinc/local-rag-mcp"],
+      "command": "local-rag-mcp",
       "env": {
         "LOCAL_RAG_DB": "/absolute/path/to/rag.db"
       }
@@ -97,7 +85,7 @@ ollama pull nomic-embed-text
 Use the same command:
 
 ```text
-npx -y @gilligantechinc/local-rag-mcp
+local-rag-mcp
 ```
 
 The server uses stdio by default, so it fits MCP hosts that launch local tools.
@@ -107,7 +95,7 @@ The server uses stdio by default, so it fits MCP hosts that launch local tools.
 | Package | Use for |
 |---------|---------|
 | `claude-memory` | Persistent project memory, rules, decisions, preferences; keyword-only FTS5 |
-| `@gilligantechinc/local-rag-mcp` | Document/chunk knowledge base with hybrid keyword/vector retrieval |
+| `@gilligan-tech/local-rag-mcp` | Document/chunk knowledge base with hybrid keyword/vector retrieval |
 
 They are siblings, not replacements. Keep durable agent instructions in `claude-memory`;
 put larger reference docs, transcripts, specs, and knowledge-base material in `local-rag-mcp`.
