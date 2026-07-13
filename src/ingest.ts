@@ -130,5 +130,20 @@ export async function embedChunksBestEffort(
     }
   }
 
+  // If embedding succeeded, guard against a silently-mixed database: vectors from different
+  // models (hence dimensions) cannot be compared, so warn the moment a mix appears.
+  if (!warning) {
+    const models = db
+      .prepare('SELECT DISTINCT model, dimension FROM embeddings')
+      .all() as Array<{ model: string; dimension: number }>;
+    if (models.length > 1) {
+      warning =
+        `This database now holds embeddings from ${models.length} different models ` +
+        `(${models.map((m) => `${m.model}:${m.dimension}d`).join(', ')}). Hybrid search only ` +
+        `compares matching dimensions — run rag_reindex with embeddings to rebuild everything ` +
+        `with the current model.`;
+    }
+  }
+
   return { count, warning };
 }

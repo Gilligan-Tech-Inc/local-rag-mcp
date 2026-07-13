@@ -3,6 +3,12 @@ import { blobToVector } from './db.js';
 import { cosineSimilarity, embedText } from './embeddings.js';
 import type { SearchHit, SearchMode, SearchResult } from './types.js';
 
+// Reciprocal Rank Fusion constant (Cormack et al. 2009). Fusing the *ranks* of the lexical
+// and vector result lists — rather than blending their raw scores — is scale-free: bm25
+// distances and cosine similarities live on different, incomparable scales, so a weighted
+// sum of the two is only ever an arbitrary knob. RRF needs no such tuning.
+const RRF_K = 60;
+
 interface Row {
   chunk_id: number;
   chunk_index: number;
@@ -14,6 +20,7 @@ interface Row {
   tags: string;
   rank?: number;
   vector?: Buffer;
+  vec_dim?: number;
 }
 
 function parseTags(raw: string): string[] {
@@ -101,15 +108,21 @@ function keywordRows(db: RagDb, query: string, collection?: string, limit = 20):
   }
 }
 
-async function vectorRows(db: RagDb, query: string, collection?: string, limit = 20): Promise<Map<number, { row: Row; score: number }>> {
+async function vectorRows(
+  db: RagDb,
+  query: string,
+  collection?: string,
+  limit = 20,
+): Promise<{ rows: Map<number, { row: Row; score: number }>; warning: string | null }> {
   const queryVector = await embedText(query);
+  const qDim = queryVector.length;
   const params: unknown[] = [];
   const where = collection ? 'WHERE d.collection = ?' : '';
   if (collection) params.push(collection);
   const rows = db
     .prepare(
       `SELECT c.id AS chunk_id, c.chunk_index, c.text, d.id AS document_id, d.title, d.source,
-              d.collection, d.tags, e.vector
+              d.collection, d.tags, e.vector, e.dimension AS vec_dim
        FROM embeddings e
        JOIN chunks c ON c.id = e.chunk_id
        JOIN documents d ON d.id = c.document_id
@@ -117,13 +130,30 @@ async function vectorRows(db: RagDb, query: string, collection?: string, limit =
     )
     .all(...params) as Row[];
 
-  return new Map(
-    rows
+  // Only vectors of the same dimensionality as the query are comparable. A different
+  // dimension means a different embedding model — silently cosine-ing against them would
+  // just return 0 and quietly poison recall, so we drop them and tell the caller.
+  let skipped = 0;
+  const comparable = rows.filter((row) => {
+    if ((row.vec_dim ?? blobToVector(row.vector as Buffer).length) === qDim) return true;
+    skipped++;
+    return false;
+  });
+  const warning =
+    skipped > 0
+      ? `${skipped} stored ${skipped === 1 ? 'vector was' : 'vectors were'} skipped: their ` +
+        `dimension differs from the current embedding model (${qDim}-d). Run ` +
+        `rag_reindex with embeddings to rebuild them for consistent search.`
+      : null;
+
+  const map = new Map(
+    comparable
       .map((row) => ({ row, score: cosineSimilarity(queryVector, blobToVector(row.vector as Buffer)) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.max(limit * 4, 50))
       .map(({ row, score }) => [row.chunk_id, { row, score }]),
   );
+  return { rows: map, warning };
 }
 
 export async function search(
@@ -139,9 +169,12 @@ export async function search(
   let vector = new Map<number, { row: Row; score: number }>();
   let warning: string | null = null;
 
+  let dimWarning: string | null = null;
   if (requestedMode !== 'keyword') {
     try {
-      vector = await vectorRows(db, query, args.collection, limit);
+      const vres = await vectorRows(db, query, args.collection, limit);
+      vector = vres.rows;
+      dimWarning = vres.warning;
     } catch (err) {
       warning = err instanceof Error ? err.message : 'Vector search unavailable.';
     }
@@ -153,6 +186,11 @@ export async function search(
       ? 'vector'
       : 'hybrid';
 
+  // Both maps are built best-first (lexical ordered by bm25, vector by cosine desc), so a
+  // key's insertion position is its rank in that list. Fuse those ranks with RRF for hybrid.
+  const lexRank = new Map(Array.from(lexical.keys()).map((id, i) => [id, i + 1]));
+  const vecRank = new Map(Array.from(vector.keys()).map((id, i) => [id, i + 1]));
+
   const chunkIds = new Set([...lexical.keys(), ...vector.keys()]);
   const hits = Array.from(chunkIds).map((id) => {
     const l = lexical.get(id);
@@ -161,7 +199,8 @@ export async function search(
     const lexicalScore = l?.score ?? null;
     const vectorScore = v?.score ?? null;
     const final = actualMode === 'hybrid'
-      ? (lexicalScore ?? 0) * 0.55 + (vectorScore ?? 0) * 0.45
+      ? (lexRank.has(id) ? 1 / (RRF_K + lexRank.get(id)!) : 0) +
+        (vecRank.has(id) ? 1 / (RRF_K + vecRank.get(id)!) : 0)
       : actualMode === 'vector'
         ? (vectorScore ?? 0)
         : (lexicalScore ?? 0);
@@ -170,11 +209,15 @@ export async function search(
 
   hits.sort((a, b) => b.score - a.score);
 
+  const messages: string[] = [];
+  if (warning && requestedMode !== 'keyword') messages.push(`Using ${actualMode} search: ${warning}`);
+  if (dimWarning) messages.push(dimWarning);
+
   return {
     query,
     requested_mode: requestedMode,
     mode_used: actualMode,
-    warning: warning && requestedMode !== 'keyword' ? `Using ${actualMode} search: ${warning}` : null,
+    warning: messages.length > 0 ? messages.join(' ') : null,
     results: hits.slice(0, limit),
   };
 }

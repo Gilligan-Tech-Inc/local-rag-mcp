@@ -1,9 +1,10 @@
 {
-  "name": "@gilligan-tech/local-rag-mcp",
-  "version": "0.1.1",
-  "description": "Pure SQLite hybrid RAG MCP server for AI coding agents. FTS5 plus optional local Ollama embeddings.",
+  "name": "@gilligantechinc/claude-memory-rag",
+  "version": "0.2.0",
+  "description": "Claude Memory RAG — pure SQLite hybrid RAG MCP server for AI coding agents. FTS5 plus optional local Ollama embeddings. Formerly @gilligan-tech/local-rag-mcp.",
   "type": "module",
   "bin": {
+    "claude-memory-rag": "dist/cli.js",
     "local-rag-mcp": "dist/cli.js"
   },
   "files": [

@@ -197,7 +197,13 @@ export function getStats(db: RagDb): RagStats {
        GROUP BY d.collection ORDER BY d.collection`,
     )
     .all() as Array<{ collection: string; documents: number; chunks: number }>;
-  return { documents, chunks, embeddings, collections };
+  const embedding_models = db
+    .prepare(
+      `SELECT provider, model, dimension, COUNT(*) AS count
+       FROM embeddings GROUP BY provider, model, dimension ORDER BY count DESC`,
+    )
+    .all() as Array<{ provider: string; model: string; dimension: number; count: number }>;
+  return { documents, chunks, embeddings, collections, embedding_models };
 }
 
 export function vectorToBlob(vector: number[]): Buffer {

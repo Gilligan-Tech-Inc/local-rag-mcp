@@ -54,4 +54,8 @@ export interface RagStats {
   chunks: number;
   embeddings: number;
   collections: Array<{ collection: string; documents: number; chunks: number }>;
+  // Distinct embedding signatures present. More than one row here means the database mixes
+  // vectors from different models/dimensions, which cannot be compared to each other —
+  // rebuild with `rag_reindex --embeddings` after settling on one model.
+  embedding_models: Array<{ provider: string; model: string; dimension: number; count: number }>;
 }

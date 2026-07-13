@@ -1,12 +1,17 @@
-# local-rag-mcp
+# claude-memory-rag (local-rag-mcp)
 
 > Pure SQLite hybrid RAG for AI coding agents. FTS5 plus optional local Ollama embeddings. No graph layer, no cloud dependency, one portable database file.
 
+[![CI](https://github.com/Gilligan-Tech-Inc/local-rag-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Gilligan-Tech-Inc/local-rag-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@gilligantechinc/claude-memory-rag.svg)](https://www.npmjs.com/package/@gilligantechinc/claude-memory-rag)
+[![npm downloads](https://img.shields.io/npm/dm/@gilligantechinc/claude-memory-rag.svg)](https://www.npmjs.com/package/@gilligantechinc/claude-memory-rag)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Built with TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 
-`local-rag-mcp` gives Claude, Codex, and VS Code MCP clients a small local knowledge base:
-documents, chunks, full-text search, optional vector search, and cited retrieval results.
+**`@gilligantechinc/claude-memory-rag`** (CLI: `local-rag-mcp`, formerly
+`@gilligan-tech/local-rag-mcp`) gives Claude, Codex, and VS Code MCP clients a small local
+knowledge base: documents, chunks, full-text search, optional vector search, and cited
+retrieval results.
 
 It intentionally does **not** implement a graph:
 
@@ -21,9 +26,11 @@ It intentionally does **not** implement a graph:
 Install globally:
 
 ```bash
-npm install -g @gilligan-tech/local-rag-mcp
+npm install -g @gilligantechinc/claude-memory-rag
 local-rag-mcp init
 ```
+
+> The CLI binary is `local-rag-mcp` (a `claude-memory-rag` alias is also installed).
 
 ## Quick Start
 
@@ -53,6 +60,37 @@ ollama pull nomic-embed-text
 | `rag_delete_document` | Delete a document and its chunks/embeddings |
 | `rag_reindex` | Rebuild FTS and optionally fill missing embeddings |
 | `rag_stats` | Show database and embedding status |
+
+## How retrieval works
+
+Hybrid search fuses two result lists — SQLite FTS5/BM25 keyword hits and cosine-similarity
+vector hits — with **Reciprocal Rank Fusion (RRF)**. RRF combines the *ranks* of each list
+rather than their raw scores, so bm25 distances and cosine similarities (which live on
+different, incomparable scales) never need an arbitrary weighting knob. When embeddings are
+unavailable, search cleanly falls back to keyword-only.
+
+Every result carries `score_parts` (`lexical`, `vector`, `final`) so the ranking is
+transparent and auditable.
+
+### Embedding consistency
+
+Vectors are only comparable when they come from the same model (hence the same dimension).
+If you change `LOCAL_RAG_EMBED_MODEL`, the database can end up mixing dimensions:
+
+- `rag_stats` reports every distinct `embedding_models` signature present.
+- Ingest warns the moment a mixed-dimension database is created.
+- Search skips vectors whose dimension doesn't match the current model (instead of silently
+  scoring them zero) and tells you.
+
+To rebuild everything under one model, run `rag_reindex` with embeddings enabled.
+
+### Scaling note
+
+Vector search currently loads the collection's embeddings and computes cosine similarity in
+Node. This is ideal for a **local, single-project knowledge base** (thousands to tens of
+thousands of chunks). For much larger corpora a native approximate-nearest-neighbour index
+(e.g. [`sqlite-vec`](https://github.com/asg017/sqlite-vec)) would be the next step; it is
+intentionally not a dependency today to keep install friction near zero.
 
 ## Configuration
 
@@ -94,11 +132,12 @@ The server uses stdio by default, so it fits MCP hosts that launch local tools.
 
 | Package | Use for |
 |---------|---------|
-| `claude-memory` | Persistent project memory, rules, decisions, preferences; keyword-only FTS5 |
-| `@gilligan-tech/local-rag-mcp` | Document/chunk knowledge base with hybrid keyword/vector retrieval |
+| `@gilligantechinc/claude-memory` | Persistent project memory, rules, decisions, preferences; keyword-only FTS5 |
+| `@gilligantechinc/claude-memory-rag` | Document/chunk knowledge base with hybrid keyword/vector retrieval |
 
-They are siblings, not replacements. Keep durable agent instructions in `claude-memory`;
-put larger reference docs, transcripts, specs, and knowledge-base material in `local-rag-mcp`.
+They are siblings in the same family, not replacements. Keep durable agent instructions in
+[`@gilligantechinc/claude-memory`](https://github.com/Gilligan-Tech-Inc/claude-memory); put
+larger reference docs, transcripts, specs, and knowledge-base material here.
 
 ## Development
 

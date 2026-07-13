@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in claude-memory-rag (local-rag-mcp) isn't working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug. Please fill in as much as you can.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: rag_search returned no results for content I ingested…
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact tool calls or CLI commands used.
+      placeholder: |
+        1. rag_ingest_text({ title: "...", text: "..." })
+        2. rag_search({ query: "...", mode: "hybrid" })
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Output of `npm ls @gilligantechinc/claude-memory-rag` or `local-rag-mcp --help`.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Search mode / embeddings
+      options:
+        - keyword only (no Ollama)
+        - hybrid with local Ollama embeddings
+        - vector only
+        - not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: node
+    attributes:
+      label: Node.js version
+      options: ["22.x", "24.x", "other (note in description)"]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 14 / Windows 11 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Any stderr from the server/CLI, or the `doctor` output. Formatted as code automatically.
+      render: shell

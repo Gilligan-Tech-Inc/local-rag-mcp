@@ -111,6 +111,68 @@ test('mocked Ollama embeddings are stored and hybrid search returns vector score
   }
 });
 
+test('dimension guard: mixed-dimension vectors trigger warnings and are skipped', async () => {
+  // A mock Ollama whose embedding length we can change between ingests, to simulate a
+  // user switching LOCAL_RAG_EMBED_MODEL to a model with a different output dimension.
+  let dim = 3;
+  const server = createServer((req, res) => {
+    if (req.url === '/api/tags') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'nomic-embed-text' }] }));
+      return;
+    }
+    if (req.url === '/api/embeddings') {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ embedding: Array.from({ length: dim }, (_, i) => (i + 1) / dim) }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  try {
+    await withTempDb(async () => {
+      delete process.env.LOCAL_RAG_DISABLE_EMBEDDINGS;
+      process.env.LOCAL_RAG_OLLAMA_URL = `http://127.0.0.1:${port}`;
+      const { openDb, getStats } = await import('../dist/db.js');
+      const { ingestText } = await import('../dist/ingest.js');
+      const { search } = await import('../dist/search.js');
+      const db = openDb();
+
+      // First doc embedded at dimension 3.
+      const first = await ingestText(db, { title: 'Old model doc', text: 'Baikal ICS import owner names.' });
+      assert.equal(first.embeddings, 1);
+      assert.equal(first.warning, null, 'no warning while the DB is single-dimension');
+
+      // Switch the "model" to a 4-dimensional one and ingest a second doc.
+      dim = 4;
+      const second = await ingestText(db, { title: 'New model doc', text: 'Baikal calendar sync new pipeline.' });
+      assert.equal(second.embeddings, 1);
+      assert.match(second.warning ?? '', /rag_reindex/i, 'ingest warns about the mixed-dimension database');
+
+      // Stats expose the mix explicitly.
+      const stats = getStats(db);
+      assert.equal(stats.embedding_models.length, 2, 'two distinct embedding signatures present');
+
+      // Searching now embeds the query at dim 4; the older 3-d vector must be skipped, not
+      // silently scored as zero, and the search should say so.
+      const result = await search(db, { query: 'Baikal import', mode: 'hybrid' });
+      assert.match(result.warning ?? '', /dimension differs/i, 'search warns that a vector was skipped');
+      assert.ok(result.results.length >= 1, 'search still returns results despite the skip');
+      db.close();
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('delete removes document chunks embeddings and fts rows', async () => {
   await withTempDb(async () => {
     const { openDb, deleteDocument, getStats } = await import('../dist/db.js');

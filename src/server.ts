@@ -1,6 +1,9 @@
+import { createRequire } from 'node:module';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RagDb } from './db.js';
+
+const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 import { deleteDocument, getChunks, getDocument, getStats, listDocuments, rebuildFts } from './db.js';
 import { checkOllama } from './embeddings.js';
 import { embedChunksBestEffort, ingestFile, ingestText } from './ingest.js';
@@ -12,7 +15,7 @@ function jsonText(value: unknown): { content: Array<{ type: 'text'; text: string
 
 export function buildServer(db: RagDb): McpServer {
   const server = new McpServer(
-    { name: 'local-rag-mcp', version: '0.1.0' },
+    { name: 'local-rag-mcp', version },
     {
       capabilities: { tools: {} },
       instructions:
