@@ -1,6 +1,6 @@
 {
   "name": "@gilligantechinc/claude-memory-rag",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Claude Memory RAG — pure SQLite hybrid RAG MCP server for AI coding agents. FTS5 plus optional local Ollama embeddings. Formerly @gilligan-tech/local-rag-mcp.",
   "type": "module",
   "bin": {
@@ -28,6 +28,8 @@
     "fts5",
     "ollama",
     "vector-search",
+    "sqlite-vec",
+    "pdf",
     "claude",
     "codex",
     "vscode",
@@ -43,6 +45,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^12.11.1",
+    "unpdf": "^1.6.2",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -53,5 +56,8 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "optionalDependencies": {
+    "sqlite-vec": "^0.1.9"
   }
 }

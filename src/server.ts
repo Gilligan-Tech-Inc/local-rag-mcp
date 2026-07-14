@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RagDb } from './db.js';
 
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
-import { deleteDocument, getChunks, getDocument, getStats, listDocuments, rebuildFts } from './db.js';
+import { deleteDocument, getChunks, getDocument, getStats, listDocuments, rebuildFts, rebuildVec } from './db.js';
 import { checkOllama } from './embeddings.js';
 import { embedChunksBestEffort, ingestFile, ingestText } from './ingest.js';
 import { search } from './search.js';
@@ -48,7 +48,7 @@ export function buildServer(db: RagDb): McpServer {
     'rag_ingest_file',
     {
       title: 'Ingest a local file into local RAG',
-      description: 'Add a local .md, .txt, or .json file to the SQLite RAG database.',
+      description: 'Add a local .md, .txt, .json, or .pdf file to the SQLite RAG database.',
       inputSchema: {
         path: z.string().min(1).max(2000),
         title: z.string().max(300).optional(),
@@ -122,7 +122,8 @@ export function buildServer(db: RagDb): McpServer {
     'rag_reindex',
     {
       title: 'Reindex local RAG',
-      description: 'Rebuild the SQLite FTS index and optionally fill missing embeddings.',
+      description:
+        'Rebuild the SQLite FTS index and the vector (sqlite-vec) index, and optionally fill missing embeddings.',
       inputSchema: {
         embeddings: z.boolean().default(false),
       },
@@ -130,7 +131,8 @@ export function buildServer(db: RagDb): McpServer {
     async (args) => {
       const ftsRows = rebuildFts(db);
       const embed = args.embeddings ? await embedChunksBestEffort(db) : { count: 0, warning: null };
-      return jsonText({ fts_rows: ftsRows, embeddings: embed.count, warning: embed.warning });
+      const vectorRows = rebuildVec(db);
+      return jsonText({ fts_rows: ftsRows, embeddings: embed.count, vector_index: vectorRows, warning: embed.warning });
     },
   );
 

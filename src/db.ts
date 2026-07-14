@@ -1,9 +1,31 @@
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
-import { ensureDbDir, getDbPath } from './config.js';
+import { createRequire } from 'node:module';
+import { ensureDbDir, getDbPath, vecDisabled } from './config.js';
 import type { ChunkRecord, DocumentRecord, RagStats } from './types.js';
 
 export type RagDb = Database.Database;
+
+// Per-connection vector-index state: whether the sqlite-vec extension loaded, and the fixed
+// dimension of the vec_chunks table once it exists. Kept in a WeakMap so multiple open DBs
+// (e.g. in tests) don't clobber a shared global.
+const vecState = new WeakMap<RagDb, { available: boolean; dim: number | null }>();
+
+// Best-effort, synchronous load of the optional sqlite-vec extension. Returns false (and never
+// throws) when the optionalDependency isn't installed, can't load on this platform, or is
+// disabled via LOCAL_RAG_DISABLE_VEC — the caller then uses the pure-JS cosine fallback.
+function tryLoadVec(db: RagDb): boolean {
+  if (vecDisabled()) return false;
+  try {
+    const require = createRequire(import.meta.url);
+    const sqliteVec = require('sqlite-vec') as { load: (db: RagDb) => void };
+    sqliteVec.load(db);
+    db.prepare('SELECT vec_version()').get();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function openDb(path = getDbPath()): RagDb {
   ensureDbDir(path);
@@ -11,7 +33,103 @@ export function openDb(path = getDbPath()): RagDb {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   migrate(db);
+  const available = tryLoadVec(db);
+  vecState.set(db, { available, dim: available ? readVecDim(db) : null });
   return db;
+}
+
+export function isVecAvailable(db: RagDb): boolean {
+  return vecState.get(db)?.available ?? false;
+}
+
+// Reads the dimension the vec_chunks table was created with (null if it doesn't exist yet).
+function readVecDim(db: RagDb): number | null {
+  const row = db
+    .prepare("SELECT value FROM settings WHERE key = 'vec_dim'")
+    .get() as { value: string } | undefined;
+  if (!row) return null;
+  const has = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vec_chunks'")
+    .get();
+  return has ? Number(row.value) : null;
+}
+
+// A vec0 table has a fixed dimension chosen at creation. Create it lazily the first time we see
+// an embedding, keyed by the implicit rowid = chunk id. Returns the table's dimension, or null
+// if vec is unavailable or the requested dimension conflicts with an existing table (that
+// vector then simply isn't ANN-indexed and is handled by the JS fallback + dimension guard).
+function ensureVecTable(db: RagDb, dim: number): number | null {
+  const state = vecState.get(db);
+  if (!state?.available) return null;
+  if (state.dim === null) {
+    // cosine metric so the ANN ranking matches the JS cosineSimilarity fallback exactly.
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(embedding float[${dim}] distance_metric=cosine)`);
+    setSetting(db, 'vec_dim', String(dim));
+    state.dim = dim;
+  }
+  return state.dim === dim ? dim : null;
+}
+
+// Insert/replace a chunk's vector in the ANN index. No-op unless vec is available and the
+// dimension matches the index. Chunk ids must bind as true integers (BigInt) for vec0.
+export function vecUpsert(db: RagDb, chunkId: number, vector: number[]): void {
+  if (ensureVecTable(db, vector.length) !== vector.length) return;
+  db.prepare('INSERT OR REPLACE INTO vec_chunks(rowid, embedding) VALUES (?, ?)').run(
+    BigInt(chunkId),
+    vectorToBlob(vector),
+  );
+}
+
+export function vecDelete(db: RagDb, chunkId: number): void {
+  const state = vecState.get(db);
+  if (!state?.available || state.dim === null) return;
+  db.prepare('DELETE FROM vec_chunks WHERE rowid = ?').run(BigInt(chunkId));
+}
+
+// KNN over the ANN index. Returns chunk_id + distance (ascending = nearest), or null to signal
+// the caller to fall back to the JS scan (vec unavailable, no index yet, or dimension mismatch).
+export function vecSearch(
+  db: RagDb,
+  queryVector: number[],
+  k: number,
+): Array<{ chunk_id: number; distance: number }> | null {
+  const state = vecState.get(db);
+  if (!state?.available || state.dim === null || state.dim !== queryVector.length) return null;
+  return db
+    .prepare(
+      'SELECT rowid AS chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? AND k = ? ORDER BY distance',
+    )
+    .all(vectorToBlob(queryVector), k) as Array<{ chunk_id: number; distance: number }>;
+}
+
+// Rebuild the ANN index from the embeddings table. Picks the most common embedding dimension as
+// the index dimension (vec0 tables are single-dimension). Returns the number of vectors indexed.
+export function rebuildVec(db: RagDb): number {
+  const state = vecState.get(db);
+  if (!state?.available) return 0;
+  db.exec('DROP TABLE IF EXISTS vec_chunks');
+  const dimRow = db
+    .prepare('SELECT dimension, COUNT(*) AS c FROM embeddings GROUP BY dimension ORDER BY c DESC LIMIT 1')
+    .get() as { dimension: number; c: number } | undefined;
+  if (!dimRow) {
+    state.dim = null;
+    db.prepare("DELETE FROM settings WHERE key = 'vec_dim'").run();
+    return 0;
+  }
+  const dim = dimRow.dimension;
+  db.exec(`CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[${dim}] distance_metric=cosine)`);
+  setSetting(db, 'vec_dim', String(dim));
+  state.dim = dim;
+  const insert = db.prepare('INSERT OR REPLACE INTO vec_chunks(rowid, embedding) VALUES (?, ?)');
+  const rows = db
+    .prepare('SELECT chunk_id, vector FROM embeddings WHERE dimension = ?')
+    .all(dim) as Array<{ chunk_id: number; vector: Buffer }>;
+  let n = 0;
+  for (const r of rows) {
+    insert.run(BigInt(r.chunk_id), r.vector);
+    n++;
+  }
+  return n;
 }
 
 export function migrate(db: RagDb): void {
@@ -173,7 +291,14 @@ export function listDocuments(
 }
 
 export function deleteDocument(db: RagDb, id: number): boolean {
-  return db.prepare('DELETE FROM documents WHERE id = ?').run(id).changes > 0;
+  // chunks/embeddings cascade via FK, but the vec0 ANN index is not FK-linked — capture the
+  // chunk ids first and remove them from the index explicitly.
+  const chunkIds = db
+    .prepare('SELECT id FROM chunks WHERE document_id = ?')
+    .all(id) as Array<{ id: number }>;
+  const deleted = db.prepare('DELETE FROM documents WHERE id = ?').run(id).changes > 0;
+  if (deleted) for (const c of chunkIds) vecDelete(db, c.id);
+  return deleted;
 }
 
 export function rebuildFts(db: RagDb): number {
@@ -203,7 +328,21 @@ export function getStats(db: RagDb): RagStats {
        FROM embeddings GROUP BY provider, model, dimension ORDER BY count DESC`,
     )
     .all() as Array<{ provider: string; model: string; dimension: number; count: number }>;
-  return { documents, chunks, embeddings, collections, embedding_models };
+
+  const available = isVecAvailable(db);
+  const dim = readVecDim(db);
+  const indexed =
+    available && dim !== null
+      ? (db.prepare('SELECT COUNT(*) AS n FROM vec_chunks').get() as { n: number }).n
+      : 0;
+  const vector_index = {
+    backend: (available ? 'sqlite-vec' : 'js') as 'sqlite-vec' | 'js',
+    available,
+    dimension: dim,
+    indexed,
+  };
+
+  return { documents, chunks, embeddings, collections, embedding_models, vector_index };
 }
 
 export function vectorToBlob(vector: number[]): Buffer {

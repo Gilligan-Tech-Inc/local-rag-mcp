@@ -53,13 +53,17 @@ ollama pull nomic-embed-text
 | Tool | Purpose |
 |------|---------|
 | `rag_ingest_text` | Add text directly to the local RAG database |
-| `rag_ingest_file` | Ingest `.md`, `.txt`, or `.json` files |
+| `rag_ingest_file` | Ingest `.md`, `.txt`, `.json`, or `.pdf` files |
 | `rag_search` | Search with keyword, vector, or hybrid retrieval |
 | `rag_get_document` | Fetch a document and its chunks |
 | `rag_list_documents` | Page through ingested documents |
 | `rag_delete_document` | Delete a document and its chunks/embeddings |
-| `rag_reindex` | Rebuild FTS and optionally fill missing embeddings |
-| `rag_stats` | Show database and embedding status |
+| `rag_reindex` | Rebuild the FTS and vector indexes, optionally filling missing embeddings |
+| `rag_stats` | Show database, embedding, and vector-index status |
+
+Ingest supports `.md`, `.txt`, `.json`, and `.pdf` (text is extracted from PDFs with
+[unpdf](https://github.com/unjs/unpdf) — pure JS, no native build; scanned/image-only PDFs
+have no extractable text).
 
 ## How retrieval works
 
@@ -84,13 +88,20 @@ If you change `LOCAL_RAG_EMBED_MODEL`, the database can end up mixing dimensions
 
 To rebuild everything under one model, run `rag_reindex` with embeddings enabled.
 
-### Scaling note
+### Scalable vector search (optional sqlite-vec, automatic fallback)
 
-Vector search currently loads the collection's embeddings and computes cosine similarity in
-Node. This is ideal for a **local, single-project knowledge base** (thousands to tens of
-thousands of chunks). For much larger corpora a native approximate-nearest-neighbour index
-(e.g. [`sqlite-vec`](https://github.com/asg017/sqlite-vec)) would be the next step; it is
-intentionally not a dependency today to keep install friction near zero.
+Vector search uses an approximate-nearest-neighbour index via
+[`sqlite-vec`](https://github.com/asg017/sqlite-vec) when it's available, so retrieval scales
+to large corpora instead of scanning every embedding in Node. `sqlite-vec` is an
+**optional dependency** (prebuilt binaries, no compile): if it can't load on your platform,
+the server transparently falls back to the pure-JS cosine scan — same results, just slower on
+big collections. The two backends use the same cosine metric, so ranking is identical.
+
+- `rag_stats.vector_index` reports the active `backend` (`sqlite-vec` or `js`) and how many
+  vectors are indexed; `local-rag-mcp doctor` shows the same.
+- Set `LOCAL_RAG_DISABLE_VEC=1` to force the JS path (useful for parity checks).
+- The ANN index is single-dimension (one embedding model per database — see *Embedding
+  consistency* above). `rag_reindex` rebuilds it.
 
 ## Configuration
 
@@ -100,6 +111,7 @@ intentionally not a dependency today to keep install friction near zero.
 | `LOCAL_RAG_OLLAMA_URL` | `http://127.0.0.1:11434` | Local Ollama API URL |
 | `LOCAL_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
 | `LOCAL_RAG_DISABLE_EMBEDDINGS` | unset | Set `1` to force keyword-only mode |
+| `LOCAL_RAG_DISABLE_VEC` | unset | Set `1` to force the pure-JS vector path (skip sqlite-vec) |
 
 ## Claude Desktop / Claude Code
 

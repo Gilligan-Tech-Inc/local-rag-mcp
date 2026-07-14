@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import type { RagDb } from './db.js';
-import { getDocument, hashContent, vectorToBlob } from './db.js';
+import { getDocument, hashContent, vecUpsert, vectorToBlob } from './db.js';
 import { chunkText, estimateTokens } from './chunk.js';
 import { embedText, getEmbedConfig } from './embeddings.js';
 import type { IngestResult } from './types.js';
@@ -21,15 +21,29 @@ export type IngestFileArgs = Omit<IngestTextArgs, 'text' | 'source'>;
 
 export async function readSupportedFile(path: string): Promise<{ title: string; text: string }> {
   const ext = extname(path).toLowerCase();
-  const raw = await readFile(path, 'utf8');
   if (ext === '.md' || ext === '.txt') {
-    return { title: basename(path), text: raw };
+    return { title: basename(path), text: await readFile(path, 'utf8') };
   }
   if (ext === '.json') {
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
     return { title: basename(path), text: JSON.stringify(parsed, null, 2) };
   }
-  throw new Error(`Unsupported file type "${ext}". v1 supports .md, .txt, and .json.`);
+  if (ext === '.pdf') {
+    // unpdf (pure-JS, wraps pdfjs) is loaded lazily so the heavy PDF stack only loads when a PDF
+    // is actually ingested, keeping normal server/CLI startup fast.
+    const buf = await readFile(path);
+    const { extractText, getDocumentProxy } = await import('unpdf');
+    const pdf = await getDocumentProxy(new Uint8Array(buf));
+    const { text } = await extractText(pdf, { mergePages: true });
+    const clean = (Array.isArray(text) ? text.join('\n') : text).replace(/[ \t]+\n/g, '\n').trim();
+    if (!clean) {
+      throw new Error(
+        `No extractable text found in PDF "${basename(path)}" — it may be a scanned/image-only PDF.`,
+      );
+    }
+    return { title: basename(path), text: clean };
+  }
+  throw new Error(`Unsupported file type "${ext}". Supported: .md, .txt, .json, .pdf.`);
 }
 
 export async function ingestFile(
@@ -123,6 +137,7 @@ export async function embedChunksBestEffort(
     try {
       const vector = await embedText(row.text);
       insert.run(row.id, cfg.provider, cfg.model, vector.length, vectorToBlob(vector), new Date().toISOString());
+      vecUpsert(db, row.id, vector); // mirror into the sqlite-vec ANN index when available (no-op otherwise)
       count++;
     } catch (err) {
       warning = err instanceof Error ? err.message : 'Embedding failed.';

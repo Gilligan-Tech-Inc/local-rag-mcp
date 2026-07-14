@@ -25,3 +25,9 @@ export function getEmbedModel(): string {
 export function embeddingsDisabled(): boolean {
   return process.env['LOCAL_RAG_DISABLE_EMBEDDINGS'] === '1';
 }
+
+// Force the pure-JS cosine path even when the sqlite-vec extension is available. Useful for
+// parity checks and for environments where loading a SQLite extension is undesirable.
+export function vecDisabled(): boolean {
+  return process.env['LOCAL_RAG_DISABLE_VEC'] === '1';
+}

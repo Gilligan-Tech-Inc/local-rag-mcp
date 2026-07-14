@@ -35,10 +35,10 @@ Usage:
   local-rag-mcp                 Start MCP stdio server
   local-rag-mcp serve           Start MCP stdio server
   local-rag-mcp init            Create/open the SQLite database
-  local-rag-mcp ingest <path>   Ingest .md, .txt, or .json
+  local-rag-mcp ingest <path>   Ingest .md, .txt, .json, or .pdf
   local-rag-mcp search <query>  Search the local RAG database
   local-rag-mcp stats           Show database stats
-  local-rag-mcp doctor          Check database and Ollama status
+  local-rag-mcp doctor          Check database, vector backend, and Ollama status
 
 Options:
   --collection <name>           Collection name (default: default)
@@ -50,6 +50,7 @@ Environment:
   LOCAL_RAG_OLLAMA_URL          Default: http://127.0.0.1:11434
   LOCAL_RAG_EMBED_MODEL         Default: nomic-embed-text
   LOCAL_RAG_DISABLE_EMBEDDINGS  Set 1 to force keyword-only mode
+  LOCAL_RAG_DISABLE_VEC         Set 1 to force the pure-JS vector path (skip sqlite-vec)
 `);
 }
 

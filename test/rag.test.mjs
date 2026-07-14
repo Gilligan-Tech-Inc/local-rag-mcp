@@ -23,6 +23,30 @@ async function withTempDb(fn) {
   }
 }
 
+// Build a tiny but byte-valid single-page PDF with the given text, so the PDF-ingest test needs
+// no committed binary fixture. Offsets are computed from string length (all-ASCII/latin1 content).
+function makePdf(text) {
+  const objs = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+  ];
+  const stream = `BT /F1 14 Tf 20 120 Td (${text}) Tj ET`;
+  objs.push(`<</Length ${stream.length}>>stream\n${stream}\nendstream`);
+  objs.push('<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>');
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  objs.forEach((body, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  offsets.forEach((o) => { pdf += `${String(o).padStart(10, '0')} 00000 n \n`; });
+  pdf += `trailer\n<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF`;
+  return Buffer.from(pdf, 'latin1');
+}
+
 test('schema migration creates pure SQLite RAG tables and no graph tables', async () => {
   await withTempDb(async () => {
     const { openDb } = await import('../dist/db.js');
@@ -170,6 +194,101 @@ test('dimension guard: mixed-dimension vectors trigger warnings and are skipped'
     });
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('ingests a PDF and finds its extracted text', async () => {
+  await withTempDb(async ({ dir }) => {
+    const pdfPath = join(dir, 'sample.pdf');
+    await writeFile(pdfPath, makePdf('Baikal pdf ingest works for Claude and Codex'));
+
+    const { openDb } = await import('../dist/db.js');
+    const { ingestFile } = await import('../dist/ingest.js');
+    const { search } = await import('../dist/search.js');
+    const db = openDb();
+
+    const ingested = await ingestFile(db, pdfPath, { collection: 'docs' });
+    assert.ok(ingested.chunks >= 1, 'PDF produced at least one chunk');
+    assert.match(ingested.document.title, /sample\.pdf/);
+
+    const result = await search(db, { query: 'Baikal ingest', collection: 'docs', mode: 'keyword' });
+    assert.ok(result.results.length >= 1, 'PDF text is searchable');
+    assert.match(result.results[0].chunk.text, /Baikal/);
+    db.close();
+  });
+});
+
+test('sqlite-vec ANN backend matches the JS fallback (parity) and reports the backend', async () => {
+  // Mock Ollama: 4-d embedding by keyword count, so nearest-neighbour order is deterministic.
+  const server = createServer((req, res) => {
+    if (req.url === '/api/tags') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'nomic-embed-text' }] }));
+      return;
+    }
+    if (req.url === '/api/embeddings') {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const t = (JSON.parse(body).prompt || '').toLowerCase();
+        const count = (w) => (t.match(new RegExp(w, 'g')) || []).length;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ embedding: [count('alpha'), count('beta'), count('gamma'), 0.1] }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const dir = await mkdtemp(join(tmpdir(), 'local-rag-vec-'));
+  const dbPath = join(dir, 'rag.db');
+
+  try {
+    process.env.LOCAL_RAG_DB = dbPath;
+    process.env.LOCAL_RAG_OLLAMA_URL = `http://127.0.0.1:${port}`;
+    delete process.env.LOCAL_RAG_DISABLE_EMBEDDINGS;
+    delete process.env.LOCAL_RAG_DISABLE_VEC;
+
+    const { openDb, getStats } = await import('../dist/db.js');
+    const { ingestText } = await import('../dist/ingest.js');
+    const { search } = await import('../dist/search.js');
+
+    // --- vec ON ---
+    let db = openDb();
+    await ingestText(db, { title: 'Alpha', text: 'alpha topic all about alpha' });
+    await ingestText(db, { title: 'Beta', text: 'beta topic all about beta' });
+    await ingestText(db, { title: 'Gamma', text: 'gamma topic all about gamma' });
+    const statsOn = getStats(db);
+    const annTop = (await search(db, { query: 'alpha', mode: 'vector' })).results[0]?.chunk.id;
+    db.close();
+
+    if (!statsOn.vector_index.available) {
+      // sqlite-vec couldn't load in this environment — assert graceful degradation, skip parity.
+      assert.equal(statsOn.vector_index.backend, 'js');
+      assert.ok(annTop !== undefined, 'vector search still works via the JS fallback');
+      return;
+    }
+
+    assert.equal(statsOn.vector_index.backend, 'sqlite-vec');
+    assert.ok(statsOn.vector_index.indexed >= 3, 'all three vectors are ANN-indexed');
+
+    // --- vec OFF (force JS path on the same database file) ---
+    process.env.LOCAL_RAG_DISABLE_VEC = '1';
+    db = openDb();
+    const statsOff = getStats(db);
+    assert.equal(statsOff.vector_index.backend, 'js');
+    const jsTop = (await search(db, { query: 'alpha', mode: 'vector' })).results[0]?.chunk.id;
+    db.close();
+
+    assert.equal(annTop, jsTop, 'ANN (sqlite-vec) and JS fallback return the same top chunk');
+  } finally {
+    delete process.env.LOCAL_RAG_DB;
+    delete process.env.LOCAL_RAG_OLLAMA_URL;
+    delete process.env.LOCAL_RAG_DISABLE_VEC;
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
