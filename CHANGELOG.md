@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0]
+
+### Added
+- **Scalable vector search via [`sqlite-vec`](https://github.com/asg017/sqlite-vec)** — an
+  approximate-nearest-neighbour index replaces the O(n) in-Node cosine scan for large corpora.
+  It's an **optional dependency**: if the extension can't load on your platform, search falls
+  back transparently to the pure-JS cosine path with identical results (both use cosine, so
+  ranking matches). `LOCAL_RAG_DISABLE_VEC=1` forces the JS path.
+- **PDF ingest** — `rag_ingest_file` and the `ingest` CLI now accept `.pdf` (text extracted with
+  [unpdf](https://github.com/unjs/unpdf), a pure-JS/no-native dependency).
+- `rag_stats` / `doctor` report `vector_index` (`backend`, `available`, `dimension`, `indexed`).
+
+### Changed
+- `rag_reindex` now rebuilds the vector index alongside the FTS index.
+
+## [0.2.0]
+
 ### Changed
 - **Renamed the npm package to `@gilligantechinc/claude-memory-rag`** so it sits in the
   same scope and product family as `@gilligantechinc/claude-memory`. The old package
@@ -46,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rag_list_documents`, `rag_delete_document`, `rag_reindex`, `rag_stats`. CLI with
   `init`, `ingest`, `search`, `stats`, and `doctor`.
 
-[Unreleased]: https://github.com/Gilligan-Tech-Inc/local-rag-mcp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Gilligan-Tech-Inc/local-rag-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Gilligan-Tech-Inc/local-rag-mcp/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Gilligan-Tech-Inc/local-rag-mcp/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Gilligan-Tech-Inc/local-rag-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Gilligan-Tech-Inc/local-rag-mcp/releases/tag/v0.1.0

@@ -15,13 +15,15 @@ local-rag-mcp init
 ```bash
 local-rag-mcp ingest ./docs/architecture.md --collection my-app
 local-rag-mcp ingest ./notes/customer-call.md --collection calls --tag transcript
+local-rag-mcp ingest ./contracts/master-agreement.pdf --collection legal
 ```
 
-Supported v1 file types:
+Supported file types:
 
 - `.md`
 - `.txt`
 - `.json`
+- `.pdf` (text is extracted automatically; scanned/image-only PDFs have no extractable text)
 
 ## 3. Search Locally
 
@@ -29,8 +31,11 @@ Supported v1 file types:
 local-rag-mcp search "deployment rules for production"
 ```
 
-If Ollama is available, search combines FTS5 keyword retrieval with vector similarity.
-If Ollama is not available, the same command falls back to keyword search and returns a warning.
+If Ollama is available, search combines FTS5 keyword retrieval with vector similarity
+(fused with Reciprocal Rank Fusion). When the optional `sqlite-vec` extension is present,
+vector search uses a scalable ANN index; otherwise it falls back to an in-Node cosine scan
+with identical results. If Ollama is not available, the same command falls back to keyword
+search and returns a warning. Run `local-rag-mcp doctor` to see the active vector backend.
 
 ## 4. Use With Claude, Codex, Or VS Code
 

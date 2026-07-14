@@ -58,4 +58,8 @@ export interface RagStats {
   // vectors from different models/dimensions, which cannot be compared to each other —
   // rebuild with `rag_reindex --embeddings` after settling on one model.
   embedding_models: Array<{ provider: string; model: string; dimension: number; count: number }>;
+  // Which vector-search backend is in effect. 'sqlite-vec' = approximate-nearest-neighbour index
+  // (scales to large corpora); 'js' = the brute-force cosine fallback. `indexed` is how many
+  // vectors are in the ANN index (0 on the js backend).
+  vector_index: { backend: 'sqlite-vec' | 'js'; available: boolean; dimension: number | null; indexed: number };
 }

@@ -1,5 +1,5 @@
 import type { RagDb } from './db.js';
-import { blobToVector } from './db.js';
+import { blobToVector, vecSearch } from './db.js';
 import { cosineSimilarity, embedText } from './embeddings.js';
 import type { SearchHit, SearchMode, SearchResult } from './types.js';
 
@@ -116,6 +116,37 @@ async function vectorRows(
 ): Promise<{ rows: Map<number, { row: Row; score: number }>; warning: string | null }> {
   const queryVector = await embedText(query);
   const qDim = queryVector.length;
+  const overFetch = Math.max(limit * 4, 50);
+
+  // Fast path: sqlite-vec ANN index. `vecSearch` returns null when the extension is unavailable
+  // or the query dimension doesn't match the index, in which case we fall through to the JS scan.
+  const knn = vecSearch(db, queryVector, overFetch);
+  if (knn !== null) {
+    const ids = knn.map((k) => k.chunk_id);
+    const annMap = new Map<number, { row: Row; score: number }>();
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => '?').join(',');
+      const byId = new Map<number, Row>();
+      const dbRows = db
+        .prepare(
+          `SELECT c.id AS chunk_id, c.chunk_index, c.text, d.id AS document_id, d.title, d.source,
+                  d.collection, d.tags
+           FROM chunks c JOIN documents d ON d.id = c.document_id
+           WHERE c.id IN (${placeholders})`,
+        )
+        .all(...ids) as Row[];
+      for (const r of dbRows) byId.set(r.chunk_id, r);
+      // Preserve KNN order (distance ascending = vector rank) so RRF fusion sees the right ranks.
+      for (const { chunk_id, distance } of knn) {
+        const row = byId.get(chunk_id);
+        if (!row) continue;
+        if (collection && row.collection !== collection) continue;
+        annMap.set(chunk_id, { row, score: 1 / (1 + distance) });
+      }
+    }
+    return { rows: annMap, warning: null };
+  }
+
   const params: unknown[] = [];
   const where = collection ? 'WHERE d.collection = ?' : '';
   if (collection) params.push(collection);
